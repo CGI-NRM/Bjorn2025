@@ -1,0 +1,188 @@
+---
+title: "Björninventering Västerbottens län, 21 augusti-31 oktober 2024"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: readable
+    logo: naturhistoriska-riksmuseet2.png
+    orientation: columns
+    vertical_layout: fill
+---
+  
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(readxl)
+library(dplyr)
+library(leaflet)
+library(ggplot2)
+library(wesanderson)
+library(RColorBrewer)
+library(leaflet.extras)
+library(lubridate)
+# library(rgdal)
+library(sf)
+
+# Read functions from these files.
+source("gps_convert.R")
+source("utils.r")
+
+plotcol <- c("gray", "orange", "green")
+
+# Change according to the counties where inventory is done.
+lan <- c("Dalarnas län (S)",
+         "Gävleborgs län (S)",
+         "Värmlands län (S)",
+         "Stockholms län (S)",
+         "Uppsala län (S)",
+         "Örebro län (S)",
+         "Västmanlands län (S)",
+         "Västerbottens län (S)")
+# Reads all excel files containing extracted samples
+DNA <- ExcelToDF(dir = "Data", pattern = "*_SEP.xlsx")
+colnames(DNA) <- c("Position", "TubeID", "RackID", "Streckkod")
+DNA$Streckkod <- toupper(DNA$Streckkod) # in case some SEP-numbers are written in lower case
+DNA$Streckkod <- gsub("'", "", DNA$Streckkod) # in case there are accidental apostrophes in the names
+DNA$Streckkod <- gsub(",", "", DNA$Streckkod) # in case there are accidental commas in the names
+
+# Reads samples registered in rovbase eg this file should be fetched
+# from rovbase daily.
+bear <- read_excel("Data/rovbasedata.xlsx")
+colnames(bear) <- c("Streckkod", "Art", "Provtyp", "Lat", "Long", "Datum", "Analysprioritet", "Kommunnummer", "Kommun", "Lansnummer", "Lan")
+bear <- bear[bear$Lan %in% lan,]
+DNA <- DNA[!duplicated(DNA$Streckkod),]
+bearmap <- base::merge(bear, DNA, by = "Streckkod", all.x = TRUE)
+bearmap$RackID[is.na(bearmap$RackID)] <- 0
+bearmap$RackID[bearmap$RackID>1] <- 1
+bearmap$Genotyp <- 0
+
+# Reads all excel files containing analysed samples
+gt <- ExcelToDF(dir = "Data/Analysed/", pattern = "*_SEP.xlsx")
+gtu <- unique(gt$SEP)
+bearmap$Genotyp <- bearmap$Streckkod%in%gtu
+bearmap$Genotyp <- ifelse(bearmap$Genotyp, yes = 1, no = 0)
+
+
+bearmap <- gps_convert(data = bearmap, latitude = "Lat", longitude = "Long")
+bearmap$Datum <- as.Date(bearmap$Datum)
+
+bearmap$code <- ifelse(bearmap$RackID + bearmap$Genotyp == 0,
+                       yes = "1. Registrerad",
+                       ifelse(bearmap$RackID + bearmap$Genotyp > 1.9,
+                       yes = "3. Prov analyserat",
+                       no = "2. DNA extraherat"))
+bearmap$code <- factor(bearmap$code, levels = c("1. Registrerad",
+                                                "2. DNA extraherat",
+                                                "3. Prov analyserat"))
+#bearmap[order(as.character(bearmap$code), decreasing = FALSE),]
+
+```
+
+```{r}
+getColor <- function() {
+  sapply(bearmap$code, function(code) {
+  if(code == "1. Registrerad") {
+    plotcol[1]
+  } else if(code == "2. DNA extraherat") {
+    plotcol[2]
+   } else {
+    plotcol[3]
+  } })
+}
+
+icons <- awesomeIcons(
+  icon = 'ios-close',
+  iconColor = 'black',
+  library = 'ion',
+  markerColor = getColor()
+)
+```
+
+
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Spillningsprover som inkommit till Naturhistoriska riksmuseet (NRM)
+
+```{r}
+# Mapping colors to the icons is done by eyeballing
+
+pal <- colorFactor(plotcol , domain = bearmap$code, ordered = FALSE)
+
+
+leaflet(bearmap) %>%
+      addTiles(group = "OSM") %>%
+      addProviderTiles(providers$OpenStreetMap,
+                       options = providerTileOptions(noWrap = TRUE)) %>%
+    addAwesomeMarkers(icon=icons,
+                      label=~as.character(Streckkod),
+                      group = "marker",
+                      clusterOptions = markerClusterOptions(), options = ) %>%
+    addLegend(pal=pal,
+              values = ~levels(code),
+              opacity=0.8,
+              title = "Provstatus",
+              position = "bottomleft") %>%
+    addSearchFeatures('marker',
+                      options = searchFeaturesOptions(zoom = 15,
+                                    openPopup = TRUE,
+                                    firstTipSubmit = TRUE,
+                                    autoCollapse = TRUE,
+                                    hideMarkerOnCollapse = FALSE)) #%>%
+#    hideGroup("marker")
+# Remove the hideGroup command
+# when there is actual samples
+# to plot. This is just to
+# show an empty map of the
+# region prior to samples arriving.
+
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Antal insamlade prover per dag sedan inventeringsstarten den 21 Augusti
+
+```{r}
+
+ggplot(as.data.frame(bearmap)) + aes(x = Datum) + geom_bar(alpha=0.9) + scale_y_continuous(name = "Insamlade prover per dag") #+
+ # geom_blank()
+
+```
+
+### inkomna prover fram till `r Sys.Date()`
+
+```{r}
+# comment the row below and uncomment the next row when actual samples
+# are available.
+# Bearsamples <- 0
+Bearsamples <- length(bearmap$code)
+valueBox(Bearsamples,
+	 icon = "fa-clipboard-check",
+	 color = plotcol[1])
+```
+
+### DNA extraherat fram till `r Sys.Date()`
+
+```{r}
+# comment the row below and uncomment the next row when actual samples
+# are available.
+#dnaextract <- 0
+dnaextract <- sum(bearmap$code == "2. DNA extraherat" | bearmap$code == "3. Prov analyserat")
+valueBox(dnaextract,
+	 icon = "fa-dna",
+	 color = plotcol[2])
+
+```
+
+### Färdiganalyserade prover `r Sys.Date()`
+
+```{r}
+# comment the row below and uncomment the next row when actual samples
+# are available.
+genotyped <- 0
+#genotyped <- sum(bearmap$code == "3. Prov analyserat")
+valueBox(genotyped,
+	 icon = "fa-paw",
+	 color = plotcol[3])
+```

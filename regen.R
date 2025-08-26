@@ -1,0 +1,1 @@
+rmarkdown::render(input = "karta.Rmd")
